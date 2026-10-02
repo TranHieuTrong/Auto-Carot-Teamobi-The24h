@@ -1,0 +1,666 @@
+{
+  "nr": {
+    "name": "Ngọc Rồng",
+    "items": [
+      {
+        "id": "384",
+        "discount": "19",
+        "price": "10000",
+        "label": "10,000 đ"
+      },
+      {
+        "id": "385",
+        "discount": "19",
+        "price": "20000",
+        "label": "20,000 đ"
+      },
+      {
+        "id": "153",
+        "discount": "19",
+        "price": "50000",
+        "label": "50,000 đ"
+      },
+      {
+        "id": "154",
+        "discount": "19",
+        "price": "100000",
+        "label": "100,000 đ"
+      },
+      {
+        "id": "155",
+        "discount": "19",
+        "price": "200000",
+        "label": "200,000 đ"
+      },
+      {
+        "id": "156",
+        "discount": "19",
+        "price": "500000",
+        "label": "500,000 đ"
+      },
+      {
+        "id": "157",
+        "discount": "19",
+        "price": "1000000",
+        "label": "1,000,000 đ"
+      }
+    ],
+    "servers": [
+      {
+        "id": "1",
+        "name": "1 Sao"
+      },
+      {
+        "id": "2",
+        "name": "2 Sao"
+      },
+      {
+        "id": "3",
+        "name": "3 Sao"
+      },
+      {
+        "id": "6",
+        "name": "4 Sao"
+      },
+      {
+        "id": "7",
+        "name": "5 Sao"
+      },
+      {
+        "id": "9",
+        "name": "6 Sao"
+      },
+      {
+        "id": "10",
+        "name": "7 Sao"
+      },
+      {
+        "id": "11",
+        "name": "8 Sao"
+      },
+      {
+        "id": "12",
+        "name": "9 sao"
+      },
+      {
+        "id": "13",
+        "name": "10 Sao"
+      },
+      {
+        "id": "15",
+        "name": "12 sao"
+      },
+      {
+        "id": "18",
+        "name": "13 sao"
+      },
+      {
+        "id": "20",
+        "name": "14 sao"
+      },
+      {
+        "id": "22",
+        "name": "15 sao"
+      },
+      {
+        "id": "14",
+        "name": "11 sao ( vip 1 )"
+      },
+      {
+        "id": "19",
+        "name": "VIP 2"
+      },
+      {
+        "id": "16",
+        "name": "super 1"
+      },
+      {
+        "id": "17",
+        "name": "super 2"
+      },
+      {
+        "id": "21",
+        "name": "super 3"
+      }
+    ]
+  },
+  "av3": {
+    "name": "Avatar 3",
+    "items": [
+      {
+        "id": "138",
+        "discount": "19",
+        "price": "50000",
+        "label": "50,000 đ"
+      },
+      {
+        "id": "139",
+        "discount": "19",
+        "price": "100000",
+        "label": "100,000 đ"
+      },
+      {
+        "id": "140",
+        "discount": "19",
+        "price": "200000",
+        "label": "200,000 đ"
+      },
+      {
+        "id": "141",
+        "discount": "19",
+        "price": "500000",
+        "label": "500,000 đ"
+      },
+      {
+        "id": "142",
+        "discount": "19",
+        "price": "1000000",
+        "label": "1,000,000 đ"
+      },
+      {
+        "id": "374",
+        "discount": "19",
+        "price": "10000",
+        "label": "10,000 đ"
+      },
+      {
+        "id": "375",
+        "discount": "19",
+        "price": "20000",
+        "label": "20,000 đ"
+      }
+    ],
+    "servers": [
+      {
+        "id": "1",
+        "name": "Avatar 3"
+      }
+    ]
+  },
+  "hs": {
+    "name": "Hiệp Sĩ Online",
+    "items": [
+      {
+        "id": "382",
+        "discount": "19",
+        "price": "10000",
+        "label": "10,000 đ"
+      },
+      {
+        "id": "383",
+        "discount": "19",
+        "price": "20000",
+        "label": "20,000 đ"
+      },
+      {
+        "id": "158",
+        "discount": "19",
+        "price": "50000",
+        "label": "50,000 đ"
+      },
+      {
+        "id": "159",
+        "discount": "19",
+        "price": "100000",
+        "label": "100,000 đ"
+      },
+      {
+        "id": "160",
+        "discount": "19",
+        "price": "200000",
+        "label": "200,000 đ"
+      },
+      {
+        "id": "161",
+        "discount": "19",
+        "price": "500000",
+        "label": "500,000 đ"
+      },
+      {
+        "id": "162",
+        "discount": "19",
+        "price": "1000000",
+        "label": "1,000,000 đ"
+      }
+    ],
+    "servers": [
+      {
+        "id": "1",
+        "name": "Chiến Thần"
+      },
+      {
+        "id": "2",
+        "name": "Rồng Lửa"
+      },
+      {
+        "id": "7",
+        "name": "Phượng Hoàng"
+      },
+      {
+        "id": "3",
+        "name": "Global"
+      },
+      {
+        "id": "8",
+        "name": "Nhân Mã"
+      },
+      {
+        "id": "12",
+        "name": "Kỳ Lân"
+      },
+      {
+        "id": "13",
+        "name": "thiên hà"
+      },
+      {
+        "id": "14",
+        "name": "Bạch Hổ"
+      }
+    ]
+  },
+  "kpah": {
+    "name": "KPAH",
+    "items": [
+      {
+        "id": "168",
+        "discount": "19",
+        "price": "50000",
+        "label": "50,000 đ"
+      },
+      {
+        "id": "169",
+        "discount": "19",
+        "price": "100000",
+        "label": "100,000 đ"
+      },
+      {
+        "id": "170",
+        "discount": "19",
+        "price": "200000",
+        "label": "200,000 đ"
+      },
+      {
+        "id": "171",
+        "discount": "19",
+        "price": "500000",
+        "label": "500,000 đ"
+      },
+      {
+        "id": "172",
+        "discount": "19",
+        "price": "1000000",
+        "label": "1,000,000 đ"
+      },
+      {
+        "id": "378",
+        "discount": "19",
+        "price": "10000",
+        "label": "10,000 đ"
+      },
+      {
+        "id": "379",
+        "discount": "19",
+        "price": "20000",
+        "label": "20,000 đ"
+      }
+    ],
+    "servers": [
+      {
+        "id": "2",
+        "name": "Tràng An"
+      },
+      {
+        "id": "2",
+        "name": "tiên la"
+      },
+      {
+        "id": "3",
+        "name": "hoàng vương"
+      },
+      {
+        "id": "3",
+        "name": "Mỹ Sơn"
+      },
+      {
+        "id": "5",
+        "name": "Kinh Môn"
+      },
+      {
+        "id": "7",
+        "name": "Hoa Lư"
+      },
+      {
+        "id": "8",
+        "name": "thăng long"
+      },
+      {
+        "id": "9",
+        "name": "cổ loa"
+      },
+      {
+        "id": "10",
+        "name": "Vạn Xuân"
+      }
+    ]
+  },
+  "army2": {
+    "name": "Mobi Army 2",
+    "items": [
+      {
+        "id": "178",
+        "discount": "19",
+        "price": "50000",
+        "label": "50,000 đ"
+      },
+      {
+        "id": "179",
+        "discount": "19",
+        "price": "100000",
+        "label": "100,000 đ"
+      },
+      {
+        "id": "180",
+        "discount": "19",
+        "price": "200000",
+        "label": "200,000 đ"
+      },
+      {
+        "id": "181",
+        "discount": "19",
+        "price": "500000",
+        "label": "500,000 đ"
+      },
+      {
+        "id": "182",
+        "discount": "19",
+        "price": "1000000",
+        "label": "1,000,000 đ"
+      },
+      {
+        "id": "372",
+        "discount": "19",
+        "price": "10000",
+        "label": "10,000 đ"
+      },
+      {
+        "id": "373",
+        "discount": "19",
+        "price": "20000",
+        "label": "20,000 đ"
+      }
+    ],
+    "servers": [
+      {
+        "id": "1",
+        "name": "Sao Hỏa"
+      },
+      {
+        "id": "0",
+        "name": "Trái Đất"
+      }
+    ]
+  },
+  "army3": {
+    "name": "Mobi Army 3",
+    "items": [
+      {
+        "id": "183",
+        "discount": "19",
+        "price": "50000",
+        "label": "50,000 đ"
+      },
+      {
+        "id": "184",
+        "discount": "19",
+        "price": "100000",
+        "label": "100,000 đ"
+      },
+      {
+        "id": "185",
+        "discount": "19",
+        "price": "200000",
+        "label": "200,000 đ"
+      },
+      {
+        "id": "186",
+        "discount": "19",
+        "price": "500000",
+        "label": "500,000 đ"
+      },
+      {
+        "id": "187",
+        "discount": "19",
+        "price": "1000000",
+        "label": "1,000,000 đ"
+      },
+      {
+        "id": "370",
+        "discount": "19",
+        "price": "10000",
+        "label": "10,000 đ"
+      },
+      {
+        "id": "371",
+        "discount": "19",
+        "price": "20000",
+        "label": "20,000 đ"
+      }
+    ],
+    "servers": []
+  },
+  "avatar": {
+    "name": "Avatar",
+    "items": [
+      {
+        "id": "193",
+        "discount": "19",
+        "price": "50000",
+        "label": "50,000 đ"
+      },
+      {
+        "id": "194",
+        "discount": "19",
+        "price": "100000",
+        "label": "100,000 đ"
+      },
+      {
+        "id": "195",
+        "discount": "19",
+        "price": "200000",
+        "label": "200,000 đ"
+      },
+      {
+        "id": "196",
+        "discount": "19",
+        "price": "500000",
+        "label": "500,000 đ"
+      },
+      {
+        "id": "197",
+        "discount": "19",
+        "price": "1000000",
+        "label": "1,000,000 đ"
+      },
+      {
+        "id": "366",
+        "discount": "19",
+        "price": "10000",
+        "label": "10,000 đ"
+      },
+      {
+        "id": "367",
+        "discount": "19",
+        "price": "20000",
+        "label": "20,000 đ"
+      }
+    ],
+    "servers": [
+      {
+        "id": "dieuky",
+        "name": "Diệu Kỳ"
+      },
+      {
+        "id": "thantien",
+        "name": "Thần Tiên"
+      }
+    ]
+  },
+  "ht": {
+    "name": "Hải Tặc Tí Hon",
+    "items": [
+      {
+        "id": "198",
+        "discount": "19",
+        "price": "50000",
+        "label": "50,000 đ"
+      },
+      {
+        "id": "199",
+        "discount": "19",
+        "price": "100000",
+        "label": "100,000 đ"
+      },
+      {
+        "id": "200",
+        "discount": "19",
+        "price": "200000",
+        "label": "200,000 đ"
+      },
+      {
+        "id": "201",
+        "discount": "19",
+        "price": "500000",
+        "label": "500,000 đ"
+      },
+      {
+        "id": "202",
+        "discount": "19",
+        "price": "1000000",
+        "label": "1,000,000 đ"
+      },
+      {
+        "id": "364",
+        "discount": "19",
+        "price": "10000",
+        "label": "10,000 đ"
+      },
+      {
+        "id": "365",
+        "discount": "19",
+        "price": "20000",
+        "label": "20,000 đ"
+      }
+    ],
+    "servers": [
+      {
+        "id": "1",
+        "name": "Going Merry"
+      },
+      {
+        "id": "2",
+        "name": "Thousand Sunny"
+      },
+      {
+        "id": "3",
+        "name": "Redforce"
+      },
+      {
+        "id": "4",
+        "name": "Oro Jackson"
+      }
+    ]
+  },
+  "nj": {
+    "name": "Ninja",
+    "items": [
+      {
+        "id": "148",
+        "discount": "19",
+        "price": "50000",
+        "label": "50,000 đ"
+      },
+      {
+        "id": "149",
+        "discount": "19",
+        "price": "100000",
+        "label": "100,000 đ"
+      },
+      {
+        "id": "150",
+        "discount": "19",
+        "price": "200000",
+        "label": "200,000 đ"
+      },
+      {
+        "id": "151",
+        "discount": "19",
+        "price": "500000",
+        "label": "500,000 đ"
+      },
+      {
+        "id": "152",
+        "discount": "19",
+        "price": "1000000",
+        "label": "1,000,000 đ"
+      },
+      {
+        "id": "386",
+        "discount": "19",
+        "price": "10000",
+        "label": "10,000 đ"
+      },
+      {
+        "id": "387",
+        "discount": "19",
+        "price": "20000",
+        "label": "20,000 đ"
+      }
+    ],
+    "servers": [
+      {
+        "id": "1",
+        "name": "Boken"
+      },
+      {
+        "id": "2",
+        "name": "Tensen"
+      },
+      {
+        "id": "5",
+        "name": "Kunnai"
+      },
+      {
+        "id": "6",
+        "name": "Katana"
+      },
+      {
+        "id": "7",
+        "name": "Tone"
+      },
+      {
+        "id": "8",
+        "name": "Sanzu"
+      },
+      {
+        "id": "2",
+        "name": "Shuriken"
+      },
+      {
+        "id": "10",
+        "name": "Sensha"
+      },
+      {
+        "id": "11",
+        "name": "Daisho"
+      },
+      {
+        "id": "12",
+        "name": "Tekkan"
+      },
+      {
+        "id": "15",
+        "name": "Bisento"
+      }
+    ]
+  }
+}

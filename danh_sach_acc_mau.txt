@@ -1,0 +1,15 @@
+# ========================================================
+# FILE DANH SÁCH TÀI KHOẢN GAME MẪU ĐỂ NẠP THẺ THE24H.VN
+# ========================================================
+# Hướng dẫn định dạng:
+# Cách 1: Chỉ điền tài khoản game (sẽ dùng chung Máy chủ & Mệnh giá đã chọn trên giao diện)
+acc_game_01
+acc_game_02
+acc_game_03
+
+# Cách 2: Tùy biến Máy chủ và Mệnh giá theo từng tài khoản:
+# Cú pháp: taikhoan|server|menhgia
+# Ví dụ:
+# acc_vip_01|1|10000     (Nạp server 1 Sao, mệnh giá 10k)
+# acc_vip_02|2|20000     (Nạp server 2 Sao, mệnh giá 20k)
+# acc_vip_03|14|50000    (Nạp server 11 Sao Vip 1, mệnh giá 50k)
