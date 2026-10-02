@@ -137,6 +137,77 @@ class The24hWebClient:
         except Exception:
             return {"user": self.user_name, "balance": self.balance}
 
+    def fetch_live_game_info(self, game_key: str) -> dict:
+        """Lấy danh sách máy chủ và gói nạp trực tiếp từ web/API the24h.vn theo thời gian thực"""
+        try:
+            page_url = f"https://the24h.vn/recharge/nap-carot/{game_key}"
+            res = self._request("GET", page_url)
+            html = res["text"]
+
+            # Parse items / gói nạp
+            items = []
+            items_match = re.search(r'<select[^>]*name="item"[^>]*>([\s\S]*?)</select>', html, re.I)
+            if items_match:
+                opt_matches = re.finditer(r'<option\s+[^>]*value="(\d+)"[^>]*>([\s\S]*?)</option>', items_match.group(1), re.I)
+                for m in opt_matches:
+                    opt_tag = m.group(0)
+                    val = m.group(1)
+                    label = re.sub(r'<[^>]+>', '', m.group(2)).strip()
+                    disc_m = re.search(r'discount="([^"]+)"', opt_tag)
+                    price_m = re.search(r'price="([^"]+)"', opt_tag)
+                    items.append({
+                        "id": val,
+                        "discount": disc_m.group(1) if disc_m else "0",
+                        "price": price_m.group(1) if price_m else "0",
+                        "label": label
+                    })
+
+            # Parse servers / máy chủ
+            servers = []
+            servers_match = re.search(r'<select[^>]*name="account\[server\]"[^>]*>([\s\S]*?)</select>', html, re.I)
+            if servers_match:
+                s_matches = re.finditer(r'<option\s+[^>]*value="([^"]+)"[^>]*>([\s\S]*?)</option>', servers_match.group(1), re.I)
+                for m in s_matches:
+                    val = m.group(1)
+                    name = re.sub(r'<[^>]+>', '', m.group(2)).strip()
+                    if val:
+                        servers.append({"id": val, "name": name})
+
+            return {"success": True, "items": items, "servers": servers}
+        except Exception as e:
+            return {"success": False, "message": str(e), "items": [], "servers": []}
+
+    def get_recharge_history(self, page: int = 1) -> list:
+        """Lấy danh sách lịch sử nạp topup trực tiếp từ the24h.vn"""
+        try:
+            url = f"https://the24h.vn/history/recharge?page={page}"
+            res = self._request("GET", url)
+            html = res["text"]
+            table_match = re.search(r'<table[^>]*>([\s\S]*?)</table>', html, re.I)
+            if not table_match:
+                return []
+            
+            rows = re.findall(r'<tr[^>]*>([\s\S]*?)</tr>', table_match.group(1), re.I)
+            history = []
+            for r in rows:
+                cols = re.findall(r'<td[^>]*>([\s\S]*?)</td>', r, re.I)
+                if len(cols) >= 8:
+                    clean = [re.sub(r'<[^>]+>', ' ', c).strip() for c in cols]
+                    acc_info = re.sub(r'\s+', ' ', clean[2]).strip()
+                    history.append({
+                        "order_code": clean[0],
+                        "service": clean[1],
+                        "account_info": acc_info,
+                        "amount": clean[3],
+                        "charged": clean[4],
+                        "status": clean[5],
+                        "pay_amount": clean[6],
+                        "created_at": clean[7]
+                    })
+            return history
+        except Exception as e:
+            return []
+
     def recharge_account(self, game_key: str, item_id: str, server_id: str, game_account: str, qty: int = 1, mkc2: str = "") -> dict:
         """
         Nạp tiền vào tài khoản game
