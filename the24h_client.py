@@ -177,8 +177,21 @@ class The24hWebClient:
         except Exception as e:
             return {"success": False, "message": str(e), "items": [], "servers": []}
 
-    def get_recharge_history(self, page: int = 1) -> list:
-        """Lấy danh sách lịch sử nạp topup trực tiếp từ the24h.vn"""
+    @staticmethod
+    def _decode_cf_email(html_snippet: str) -> str:
+        """Giải mã email bị Cloudflare mã hóa qua data-cfemail"""
+        def _repl(m):
+            try:
+                hex_str = m.group(1)
+                k = int(hex_str[:2], 16)
+                return "".join([chr(int(hex_str[i:i+2], 16) ^ k) for i in range(2, len(hex_str), 2)])
+            except Exception:
+                return ""
+        # Thay thế các thẻ chứa data-cfemail
+        return re.sub(r'<[^>]*data-cfemail=["\']([0-9a-fA-F]+)["\'][^>]*>[\s\S]*?</[^>]+>', _repl, html_snippet)
+
+    def _fetch_recharge_history_page(self, page: int = 1) -> list:
+        """Tải dữ liệu 1 trang lịch sử nạp cụ thể từ the24h.vn"""
         try:
             url = f"https://the24h.vn/history/recharge?page={page}"
             res = self._request("GET", url)
@@ -192,12 +205,23 @@ class The24hWebClient:
             for r in rows:
                 cols = re.findall(r'<td[^>]*>([\s\S]*?)</td>', r, re.I)
                 if len(cols) >= 8:
-                    clean = [re.sub(r'<[^>]+>', ' ', c).strip() for c in cols]
+                    clean = []
+                    for c in cols:
+                        c_decoded = self._decode_cf_email(c)
+                        c_clean = re.sub(r'<[^>]+>', ' ', c_decoded).strip()
+                        clean.append(c_clean)
+
                     acc_info = re.sub(r'\s+', ' ', clean[2]).strip()
+                    parts = acc_info.split(None, 1)
+                    server_id = parts[0] if len(parts) >= 2 else ""
+                    game_username = parts[1] if len(parts) >= 2 else acc_info
+
                     history.append({
                         "order_code": clean[0],
                         "service": clean[1],
                         "account_info": acc_info,
+                        "server_id": server_id,
+                        "game_username": game_username,
                         "amount": clean[3],
                         "charged": clean[4],
                         "status": clean[5],
@@ -205,8 +229,54 @@ class The24hWebClient:
                         "created_at": clean[7]
                     })
             return history
-        except Exception as e:
+        except Exception:
             return []
+
+    def get_recharge_history(self, page: int = 0, progress_callback=None) -> list:
+        """
+        Lấy danh sách lịch sử nạp topup trực tiếp từ the24h.vn
+        Nếu page == 0: Tự động tải TẤT CẢ các trang (toàn bộ lịch sử giao dịch từ trước tới nay)
+        Nếu page > 0: Tải 1 trang cụ thể được chỉ định
+        """
+        if page > 0:
+            return self._fetch_recharge_history_page(page)
+
+        all_history = []
+        seen_order_codes = set()
+        p = 1
+        max_pages = 100  # Giới hạn an toàn tối đa 100 trang
+
+        while p <= max_pages:
+            items = self._fetch_recharge_history_page(p)
+            if not items:
+                break
+
+            new_items = []
+            for it in items:
+                code = it.get("order_code", "")
+                if code and code in seen_order_codes:
+                    continue
+                if code:
+                    seen_order_codes.add(code)
+                new_items.append(it)
+
+            if not new_items:
+                break
+
+            all_history.extend(new_items)
+            if progress_callback:
+                try:
+                    progress_callback(p, len(all_history))
+                except Exception:
+                    pass
+
+            if len(items) < 20:
+                # Trang cuối cùng (the24h mặc định 20 dòng/trang)
+                break
+
+            p += 1
+
+        return all_history
 
     def recharge_account(self, game_key: str, item_id: str, server_id: str, game_account: str, qty: int = 1, mkc2: str = "") -> dict:
         """
@@ -317,6 +387,179 @@ class The24hWebClient:
             }
         except Exception as e:
             return {"success": False, "message": f"Lỗi: {str(e)}"}
+
+    def get_deposit_info(self, amount: int = 0) -> dict:
+        """
+        Lấy thông tin nạp quỹ VND bằng cách tạo đơn nạp trực tiếp trên the24h.vn
+        để lấy chính xác: Ngân hàng, Số tài khoản (hoặc VA BIDV), Chủ tài khoản, Cú pháp nạp tự động
+        """
+        try:
+            amt = max(10000, int(amount)) if amount > 0 else 50000
+            deposit_url = "https://the24h.vn/wallet/deposit/vnd"
+            res = self._request("GET", deposit_url)
+            html = res.get("text", "")
+
+            # 1. Trích xuất CSRF, Wallet ID, Paygate từ form /wallet/deposit/vnd
+            csrf_m = re.search(r'name="_token"\s+value="([^"]+)"', html)
+            if not csrf_m:
+                csrf_m = re.search(r'<meta name="csrf-token"\s+content="([^"]+)"', html)
+            csrf = csrf_m.group(1) if csrf_m else ""
+
+            wallet_m = re.search(r'name="wallet"\s+(?:type="hidden"\s+)?value="([^"]+)"', html)
+            if not wallet_m:
+                wallet_m = re.search(r'value="([^"]+)"\s+name="wallet"', html)
+            wallet = wallet_m.group(1) if wallet_m else ""
+
+            paygate = "Localbank_BIDV"
+            pg_match = re.search(r'<option[^>]*value="([^"]*(?:bidv|local|bank)[^"]*)"', html, re.I)
+            if pg_match:
+                paygate = pg_match.group(1)
+
+            form_action_m = re.search(r'<form[^>]*action="([^"]*deposit/post[^"]*)"', html, re.I)
+            post_url = form_action_m.group(1) if form_action_m else "https://the24h.vn/wallet/deposit/post"
+            if not post_url.startswith("http"):
+                post_url = "https://the24h.vn" + (post_url if post_url.startswith("/") else f"/{post_url}")
+
+            order_html = ""
+            order_url = ""
+            if csrf and wallet:
+                post_data = {
+                    "_token": csrf,
+                    "net_amount": str(amt),
+                    "wallet": wallet,
+                    "paygate_code": paygate
+                }
+                order_res = self._request(
+                    "POST",
+                    post_url,
+                    data=post_data,
+                    headers={"Referer": deposit_url},
+                    allow_redirects=True
+                )
+                order_html = order_res.get("text", "")
+                order_url = order_res.get("url", "")
+
+            target_html = order_html if order_html else html
+
+            # 2. Trích xuất Số tài khoản (hỗ trợ cả chữ và số cho BIDV Virtual Account như 963IOTBKH0055800451)
+            account_no = ""
+            stk_match = re.search(r'Số tài khoản:?</td>\s*<td[^>]*>([\s\S]*?)</td>', target_html, re.I)
+            if stk_match:
+                account_no = re.sub(r'<[^>]+>', ' ', stk_match.group(1)).strip()
+            if not account_no:
+                clip_stk = re.search(r'class="[^"]*copyaccnum[^"]*"[^>]*data-clipboard-text="([^"]+)"', target_html, re.I)
+                if clip_stk:
+                    account_no = clip_stk.group(1).strip()
+            if not account_no:
+                clip_stk2 = re.search(r'data-clipboard-text="([A-Za-z0-9]{8,25})"', target_html)
+                if clip_stk2:
+                    account_no = clip_stk2.group(1).strip()
+            if not account_no:
+                stk_match2 = re.search(r'(?:Số tài khoản|STK|Account Number|Số TK)[:\s]*<[^>]*>([A-Za-z0-9\s]+)<', target_html, re.I)
+                if stk_match2:
+                    account_no = stk_match2.group(1).strip()
+            account_no = re.sub(r'\s+', '', account_no)
+
+            # 3. Trích xuất Tên chủ tài khoản
+            account_name = ""
+            holder_match = re.search(r'Tên tài khoản:?</td>\s*<td[^>]*>([\s\S]*?)</td>', target_html, re.I)
+            if holder_match:
+                account_name = re.sub(r'<[^>]+>', ' ', holder_match.group(1)).strip()
+            if not account_name:
+                holder_m2 = re.search(r'(?:Tên tài khoản|Chủ tài khoản|Người thụ hưởng)[:\s]*<[^>]*>([A-Z\s]{3,35})<', target_html, re.I)
+                if holder_m2:
+                    account_name = holder_m2.group(1).strip()
+            if not account_name:
+                account_name = "THE24H"
+
+            # 4. Trích xuất Ngân hàng
+            bank_name = "BIDV"
+            bank_match = re.search(r'Ngân hàng:?</td>\s*<td[^>]*>([\s\S]*?)</td>', target_html, re.I)
+            if bank_match:
+                b_text = re.sub(r'<[^>]+>', ' ', bank_match.group(1)).strip()
+                if "BIDV" in b_text.upper():
+                    bank_name = "BIDV"
+                elif "VIETCOMBANK" in b_text.upper() or "VCB" in b_text.upper():
+                    bank_name = "Vietcombank"
+                elif "MB" in b_text.upper():
+                    bank_name = "MBBank"
+                else:
+                    bank_name = b_text
+            else:
+                if "BIDV" in target_html:
+                    bank_name = "BIDV"
+
+            # 5. Trích xuất Cú pháp / Nội dung nạp tiền
+            syntax = ""
+            syntax_match = re.search(r'Nội dung thanh toán:?</td>\s*<td[^>]*>([\s\S]*?)</td>', target_html, re.I)
+            if syntax_match:
+                syntax = re.sub(r'<[^>]+>', ' ', syntax_match.group(1)).strip()
+            if not syntax:
+                clip_mes = re.search(r'class="[^"]*copymes[^"]*"[^>]*data-clipboard-text="([^"]+)"', target_html, re.I)
+                if clip_mes:
+                    syntax = clip_mes.group(1).strip()
+            if not syntax:
+                uname = self.user_name or "THE24H"
+                syntax = f"THE24H {uname}"
+
+            # 6. Trích xuất số tiền thực ghi trên hóa đơn
+            order_amt = amt
+            clip_amt = re.search(r'class="[^"]*copyamount[^"]*"[^>]*data-clipboard-text="([^"]+)"', target_html, re.I)
+            if clip_amt:
+                try:
+                    order_amt = int(float(clip_amt.group(1).strip()))
+                except Exception:
+                    order_amt = amt
+
+            return {
+                "success": bool(account_no),
+                "bank_name": bank_name,
+                "account_no": account_no,
+                "account_name": account_name,
+                "syntax": syntax,
+                "amount": order_amt,
+                "order_url": order_url,
+                "direct_qr_url": ""
+            }
+        except Exception as e:
+            return {
+                "success": False,
+                "message": f"Không lấy được thông tin nạp quỹ: {str(e)}",
+                "bank_name": "BIDV",
+                "account_no": "",
+                "account_name": "THE24H",
+                "syntax": f"THE24H {self.user_name or ''}".strip(),
+                "amount": amount,
+                "order_url": "",
+                "direct_qr_url": ""
+            }
+
+    @staticmethod
+    def generate_vietqr_url(bank_code: str, account_no: str, account_name: str, amount: int, memo: str) -> str:
+        """Tạo link mã QR VietQR chuẩn ngân hàng 24/7 theo số tiền và nội dung"""
+        import urllib.parse
+        b = (bank_code or "bidv").lower().strip()
+        bank_mapping = {
+            "bidv": "bidv",
+            "vietcombank": "vietcombank",
+            "vcb": "vietcombank",
+            "mbbank": "mb",
+            "mb": "mb",
+            "mb bank": "mb",
+            "techcombank": "techcombank",
+            "tcb": "techcombank",
+            "vietinbank": "vietinbank",
+            "icb": "vietinbank",
+            "acb": "acb",
+            "tpbank": "tpbank",
+            "vpbank": "vpbank"
+        }
+        b_clean = bank_mapping.get(b, b)
+        acc = re.sub(r'\s+', '', account_no.strip())
+        amt = max(0, int(amount))
+        q_memo = urllib.parse.quote(memo.strip())
+        q_name = urllib.parse.quote(account_name.strip())
+        return f"https://img.vietqr.io/image/{b_clean}-{acc}-compact2.png?amount={amt}&addInfo={q_memo}&accountName={q_name}"
 
 
 class The24hPartnerApiClient:

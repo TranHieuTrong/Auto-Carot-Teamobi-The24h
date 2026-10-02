@@ -23,9 +23,15 @@ Tool Python có giao diện đồ họa hiện đại (**GUI CustomTkinter**) h�
    - Bảng danh sách chi tiết (STT, Tài khoản, Server, Gói nạp, Số tiền, Trạng thái, Mã đơn, Chi tiết lỗi).
    - Thanh tiến trình % hoàn thành và thống kê (Tổng đơn, Thành công, Thất bại, Tổng tiền đã chi).
    - Nhật ký (Log) chi tiết từng giây.
-6. **Xuất báo cáo kết quả**:
+6. **Nạp Quỹ Tự Động Bằng Mã QR VietQR 24/7 (Thông Minh)**:
+   - **Tự động tính số tiền thiếu**: So sánh số dư ví the24h.vn với tổng tiền cần nạp cho danh sách nick.
+   - **Tự động tạo mã VietQR chuẩn**: Nếu thiếu tiền, hệ thống tự động tạo mã QR VietQR đúng số tiền còn thiếu kèm chính xác cú pháp nạp tiền cá nhân `THE24H [username]` và số tài khoản ngân hàng thụ hưởng.
+   - **Quét mã 1 chạm**: Quét bằng mọi App Ngân Hàng (VCB, BIDV, MB, Techcombank, TPBank, Momo...) mà không phải tự gõ số tiền hay nội dung.
+   - **Tự động nhận diện tiền vào ví (Auto-polling)**: Lắng nghe trạng thái số dư ví mỗi 4 giây. Khi tiền vừa vào ví web, tool tự động phát hiện số dư mới và cho phép 1-click `🚀 ĐỦ TIỀN RỒI - BẮT ĐẦU NẠP NGAY` để tự động chạy tiếp!
+7. **Xuất báo cáo & Tra cứu lịch sử**:
+   - Tra cứu trực tiếp lịch sử nạp gần nhất từ tài khoản the24h.vn với tên server chuẩn (7 Sao, 15 Sao...).
    - Xuất toàn bộ kết quả nạp ra file `.CSV` hoặc `.TXT` để lưu trữ hoặc đối soát đơn.
-7. **Hỗ trợ cả chế độ API Partner chính thức**:
+8. **Hỗ trợ cả chế độ API Partner chính thức**:
    - Có sẵn module kết nối API Partner (`partner_id`, `partner_key`, mã hóa MD5 signature) qua endpoint `https://the24h.vn/api/rechargews`.
 
 ---
@@ -46,7 +52,7 @@ python app.py
 ## 📖 HƯỚNG DẪN SỬ DỤNG
 
 1. **Bước 1: Đăng nhập**
-   - Nhập tài khoản và mật khẩu the24h.vn (đã lưu sẵn `xlzeruslx` / `trong1507`).
+   - Nhập tài khoản và mật khẩu the24h.vn của bạn.
    - Nhập **Mật khẩu cấp 2 (MKC2)** nếu muốn tool tự động thanh toán đơn qua Quỹ VND.
    - Bấm **"ĐĂNG NHẬP THE24H"**. Khi kết nối thành công, số dư ví sẽ hiển thị ở góc trên bên phải.
 
@@ -79,13 +85,18 @@ python app.py
 5. **Bước 5: Xuất báo cáo**
    - Sau khi hoàn thành, bấm **"📊 Xuất Báo Cáo"** để lưu file CSV danh sách kết quả mã đơn hàng.
 
+## 🔒 CAM KẾT BẢO MẬT & AN TOÀN TUYỆT ĐỐI (OPEN-SOURCE SAFE)
+
+- **Không lưu trữ thông tin đăng nhập**: Tool hoàn toàn **KHÔNG** lưu tài khoản, mật khẩu hay Mật khẩu cấp 2 (MKC2) vào bất kỳ file nào trên máy tính.
+- **Hoạt động hoàn toàn trên RAM**: Khi nhập thông tin và chạy tool, các giá trị chỉ nằm tạm thời trên bộ nhớ RAM. Khi bạn tắt ứng dụng, mọi dữ liệu đăng nhập sẽ tự động biến mất hoàn toàn.
+- **100% An toàn khi Public lên GitHub**: Không có bất kỳ dữ liệu nhạy cảm hay file lưu trữ bí mật nào được tạo ra, người dùng có thể thoải mái fork, clone hoặc chia sẻ công khai mà không lo lộ lọt thông tin cá nhân.
+
 ---
 
 ## 📁 CẤU TRÚC FILE DỰ ÁN
 
-- `app.py`: Giao diện chính CustomTkinter hiện đại, đa luồng.
+- `app.py`: Giao diện chính CustomTkinter hiện đại, đa luồng, bảo mật RAM-only.
 - `the24h_client.py`: Client backend tương tác web và API chính thức the24h.vn.
 - `games_catalog.json`: Bảng dữ liệu tất cả game, server và giá gói nạp carot.
-- `config.json`: File lưu cấu hình (tài khoản, cài đặt).
 - `danh_sach_acc_mau.txt`: File danh sách tài khoản mẫu.
 - `Chay_Tool_Nap_The24h.bat`: File khởi động nhanh 1-click.

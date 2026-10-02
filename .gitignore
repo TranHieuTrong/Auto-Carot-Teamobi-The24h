@@ -1,0 +1,16 @@
+# Configuration & sensitive info
+config.json
+*.env
+*.log
+
+# Python cache
+__pycache__/
+*.py[cod]
+*$py.class
+.pytest_cache/
+
+# IDE & OS
+.vscode/
+.idea/
+Thumbs.db
+Desktop.ini

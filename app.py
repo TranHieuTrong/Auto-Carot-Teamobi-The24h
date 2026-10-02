@@ -9,12 +9,16 @@ import tkinter as tk
 from tkinter import ttk, filedialog, messagebox
 import customtkinter as ctk
 
+import io
+import urllib.parse
+import requests
+from PIL import Image, ImageTk
+
 from the24h_client import The24hWebClient, The24hPartnerApiClient
 
 ctk.set_appearance_mode("Dark")
 ctk.set_default_color_theme("blue")
 
-CONFIG_FILE = "config.json"
 CATALOG_FILE = "games_catalog.json"
 
 # Bảng quy đổi ngọc / lượng / xu tham khảo chuẩn Teamobi / Carot
@@ -29,6 +33,504 @@ GEM_RATES = {
 }
 
 
+class TopupQRDialog(ctk.CTkToplevel):
+    """Cửa sổ Nạp Tiền Quỹ the24h.vn qua mã QR VietQR tự động 24/7"""
+    def __init__(self, parent, web_client, default_amount: int = 0, on_topup_success=None):
+        super().__init__(parent)
+        self.parent = parent
+        self.web_client = web_client
+        self.default_amount = max(10000, int(default_amount)) if int(default_amount) > 0 else 50000
+        self.current_amount = self.default_amount
+        self.on_topup_success = on_topup_success
+
+        self.title("⚡ NẠP TIỀN VÀO QUỸ THE24H.VN - QUÉT MÃ QR VIETQR")
+        self.geometry("860x700")
+        self.minsize(800, 640)
+        self.configure(fg_color="#14171f")
+        self.transient(parent)
+        self.grab_set()
+
+        self.initial_balance_val = self.parent._parse_money_val(self.web_client.balance)
+        self.is_closed = False
+        self.poll_active = True
+        self.poll_timer = None
+        self.deposit_data = {}
+        self.qr_image_tk = None
+
+        self.setup_ui()
+        self.fetch_deposit_info_async()
+        self.start_balance_polling()
+        self.protocol("WM_DELETE_WINDOW", self.on_close)
+
+    def is_alive(self):
+        try:
+            return not getattr(self, "is_closed", False) and bool(self.winfo_exists())
+        except Exception:
+            return False
+
+    def on_close(self):
+        self.is_closed = True
+        self.poll_active = False
+        if self.poll_timer is not None:
+            try:
+                self.after_cancel(self.poll_timer)
+            except Exception:
+                pass
+            self.poll_timer = None
+        try:
+            self.grab_release()
+        except Exception:
+            pass
+        try:
+            self.destroy()
+        except Exception:
+            pass
+
+    def setup_ui(self):
+        self.grid_columnconfigure(0, weight=1)
+        self.grid_rowconfigure(1, weight=1)
+
+        # Header banner
+        header = ctk.CTkFrame(self, fg_color="#1e222d", corner_radius=0, height=60)
+        header.grid(row=0, column=0, sticky="ew", padx=0, pady=(0, 10))
+        header.grid_columnconfigure(0, weight=1)
+
+        lbl_t = ctk.CTkLabel(
+            header, 
+            text="⚡ NẠP TIỀN QUỸ THE24H.VN QUA MÃ QR NGÂN HÀNG (VIETQR 24/7)",
+            font=ctk.CTkFont(size=15, weight="bold"),
+            text_color="#00d2ff"
+        )
+        lbl_t.pack(anchor="w", padx=16, pady=(10, 2))
+
+        lbl_sub = ctk.CTkLabel(
+            header,
+            text="Hệ thống the24h.vn sẽ tự động nhận diện và cộng số dư vào ví trong 10-30 giây sau khi chuyển khoản",
+            font=ctk.CTkFont(size=11),
+            text_color="#9aa0a6"
+        )
+        lbl_sub.pack(anchor="w", padx=16, pady=(0, 10))
+
+        # Main Body (2 Columns)
+        body = ctk.CTkFrame(self, fg_color="transparent")
+        body.grid(row=1, column=0, sticky="nsew", padx=12, pady=0)
+        body.grid_columnconfigure(0, weight=1)
+        body.grid_columnconfigure(1, weight=1)
+        body.grid_rowconfigure(0, weight=1)
+
+        # ----------------- CỘT TRÁI: MÃ QR -----------------
+        card_left = ctk.CTkFrame(body, fg_color="#1e222d", corner_radius=10, border_width=1, border_color="#262c3b")
+        card_left.grid(row=0, column=0, sticky="nsew", padx=(0, 6), pady=0)
+        card_left.grid_columnconfigure(0, weight=1)
+
+        lbl_card_qr = ctk.CTkLabel(card_left, text="📱 MÃ QR CHUYỂN KHOẢN TỰ ĐỘNG", font=ctk.CTkFont(size=13, weight="bold"), text_color="#00e676")
+        lbl_card_qr.pack(anchor="w", padx=14, pady=(12, 6))
+
+        # Khung hiển thị QR
+        self.frame_qr = ctk.CTkFrame(card_left, fg_color="#ffffff", corner_radius=8, width=270, height=270)
+        self.frame_qr.pack(padx=14, pady=6)
+        self.frame_qr.pack_propagate(False)
+
+        self.lbl_qr_img = ctk.CTkLabel(self.frame_qr, text="⏳ Đang tạo hóa đơn & mã VietQR...", font=ctk.CTkFont(size=12, weight="bold"), text_color="#1e222d", wraplength=240, justify="center")
+        self.lbl_qr_img.pack(expand=True, fill="both")
+
+        lbl_qr_hint = ctk.CTkLabel(
+            card_left,
+            text="📲 Mở App Ngân hàng bất kỳ (VCB, BIDV, MB, Tech, Momo...)\nchọn Quét QR để tự điền số tiền & nội dung",
+            font=ctk.CTkFont(size=11),
+            text_color="#9aa0a6",
+            justify="center"
+        )
+        lbl_qr_hint.pack(padx=10, pady=(6, 8))
+
+        # Chọn nhanh số tiền nạp
+        lbl_quick = ctk.CTkLabel(card_left, text="⚡ Chọn nhanh số tiền nạp:", font=ctk.CTkFont(size=11, weight="bold"), text_color="#ffd54f")
+        lbl_quick.pack(anchor="w", padx=14, pady=(4, 4))
+
+        quick_frame = ctk.CTkFrame(card_left, fg_color="transparent")
+        quick_frame.pack(fill="x", padx=10, pady=(0, 10))
+
+        amounts_to_show = []
+        if self.default_amount > 0 and self.default_amount not in [20000, 50000, 100000, 200000, 500000]:
+            amounts_to_show.append((f"Thiếu ({self.default_amount:,}đ)", self.default_amount))
+        amounts_to_show.extend([
+            ("20k", 20000),
+            ("50k", 50000),
+            ("100k", 100000),
+            ("200k", 200000),
+            ("500k", 500000)
+        ])
+
+        for txt, val in amounts_to_show:
+            btn = ctk.CTkButton(
+                quick_frame,
+                text=txt,
+                width=65,
+                height=26,
+                font=ctk.CTkFont(size=10, weight="bold"),
+                fg_color="#262c3b",
+                hover_color="#0284c7",
+                command=lambda v=val: self.set_amount(v)
+            )
+            btn.pack(side="left", padx=3, pady=2)
+
+        # ----------------- CỘT PHẢI: THÔNG TIN & CÚ PHÁP -----------------
+        card_right = ctk.CTkFrame(body, fg_color="#1e222d", corner_radius=10, border_width=1, border_color="#262c3b")
+        card_right.grid(row=0, column=1, sticky="nsew", padx=(6, 0), pady=0)
+        card_right.grid_columnconfigure(0, weight=1)
+
+        lbl_card_info = ctk.CTkLabel(card_right, text="📋 THÔNG TIN THỤ HƯỞNG & CÚ PHÁP", font=ctk.CTkFont(size=13, weight="bold"), text_color="#00d2ff")
+        lbl_card_info.pack(anchor="w", padx=14, pady=(12, 6))
+
+        # Nhập số tiền tùy chỉnh
+        box_amt = ctk.CTkFrame(card_right, fg_color="#262c3b", corner_radius=6)
+        box_amt.pack(fill="x", padx=12, pady=(0, 8))
+        
+        lbl_a = ctk.CTkLabel(box_amt, text="Số tiền muốn nạp (VNĐ):", font=ctk.CTkFont(size=11, weight="bold"), text_color="#ffd54f")
+        lbl_a.pack(anchor="w", padx=10, pady=(6, 2))
+
+        amt_input_row = ctk.CTkFrame(box_amt, fg_color="transparent")
+        amt_input_row.pack(fill="x", padx=10, pady=(0, 8))
+
+        self.entry_amount = ctk.CTkEntry(amt_input_row, height=32, font=ctk.CTkFont(size=13, weight="bold"))
+        self.entry_amount.insert(0, str(self.current_amount))
+        self.entry_amount.pack(side="left", fill="x", expand=True, padx=(0, 8))
+
+        btn_apply_amt = ctk.CTkButton(
+            amt_input_row,
+            text="🔄 Tạo lại QR",
+            width=95,
+            height=32,
+            font=ctk.CTkFont(size=11, weight="bold"),
+            fg_color="#0284c7",
+            hover_color="#0369a1",
+            command=self.on_amount_submitted
+        )
+        btn_apply_amt.pack(side="right")
+
+        # Bảng chi tiết chuyển khoản
+        box_details = ctk.CTkFrame(card_right, fg_color="#262c3b", corner_radius=6)
+        box_details.pack(fill="x", padx=12, pady=(0, 8))
+
+        self.row_bank = self._build_info_row(box_details, "🏦 Ngân hàng:", "BIDV")
+        self.row_stk = self._build_info_row(box_details, "🔢 Số tài khoản:", "Đang tải...", has_copy=True)
+        self.row_holder = self._build_info_row(box_details, "👤 Chủ tài khoản:", "THE24H", has_copy=True)
+        self.row_money = self._build_info_row(box_details, "💵 Số tiền nạp:", f"{self.current_amount:,} đ", has_copy=True)
+        self.row_memo = self._build_info_row(box_details, "📝 Nội dung (BẮT BUỘC):", "Đang tải...", has_copy=True, highlight=True)
+
+        # Cảnh báo lưu ý
+        warn_box = ctk.CTkFrame(card_right, fg_color="#312217", border_width=1, border_color="#f59e0b", corner_radius=6)
+        warn_box.pack(fill="x", padx=12, pady=(4, 10))
+
+        lbl_w1 = ctk.CTkLabel(
+            warn_box,
+            text="⚠️ QUAN TRỌNG: Quét mã QR sẽ tự động điền đúng Số tiền & Nội dung.\nNếu nhập tay trong App Ngân Hàng, BẮT BUỘC ghi đúng Nội dung chuyển khoản ở trên để hệ thống tự động cộng số dư vào ví!",
+            font=ctk.CTkFont(size=10, weight="bold"),
+            text_color="#fcd34d",
+            justify="left"
+        )
+        lbl_w1.pack(padx=10, pady=8)
+
+        # ----------------- FOOTER ACTIONS & STATUS -----------------
+        footer = ctk.CTkFrame(self, fg_color="#181a20", height=65, corner_radius=0)
+        footer.grid(row=2, column=0, sticky="ew", padx=0, pady=0)
+        footer.grid_columnconfigure(0, weight=1)
+
+        foot_bar = ctk.CTkFrame(footer, fg_color="transparent")
+        foot_bar.pack(fill="x", padx=16, pady=10)
+
+        left_stat = ctk.CTkFrame(foot_bar, fg_color="transparent")
+        left_stat.pack(side="left")
+
+        self.lbl_wallet_now = ctk.CTkLabel(
+            left_stat,
+            text=f"Số dư ví the24h: {self.web_client.balance or '0đ'}",
+            font=ctk.CTkFont(size=12, weight="bold"),
+            text_color="#00e5ff"
+        )
+        self.lbl_wallet_now.pack(anchor="w")
+
+        self.lbl_status = ctk.CTkLabel(
+            left_stat,
+            text="🟢 Đang theo dõi số dư ví (tự động kiểm tra mỗi 4s)...",
+            font=ctk.CTkFont(size=11),
+            text_color="#9aa0a6"
+        )
+        self.lbl_status.pack(anchor="w")
+
+        btn_close = ctk.CTkButton(
+            foot_bar,
+            text="Đóng",
+            width=90,
+            height=36,
+            fg_color="#374151",
+            hover_color="#4b5563",
+            command=self.on_close
+        )
+        btn_close.pack(side="right", padx=(8, 0))
+
+        self.btn_start_topup = ctk.CTkButton(
+            foot_bar,
+            text="🚀 Bắt đầu nạp danh sách",
+            width=180,
+            height=36,
+            font=ctk.CTkFont(size=12, weight="bold"),
+            fg_color="#374151",
+            hover_color="#4b5563",
+            state="disabled",
+            command=self.on_start_batch_clicked
+        )
+        self.btn_start_topup.pack(side="right", padx=(8, 0))
+
+        btn_manual_check = ctk.CTkButton(
+            foot_bar,
+            text="🔄 Kiểm tra số dư ví ngay",
+            width=170,
+            height=36,
+            font=ctk.CTkFont(size=12, weight="bold"),
+            fg_color="#0284c7",
+            hover_color="#0369a1",
+            command=lambda: self._check_balance_once(silent=False)
+        )
+        btn_manual_check.pack(side="right")
+
+    def _build_info_row(self, parent, label_text, default_val, has_copy=False, highlight=False):
+        row = ctk.CTkFrame(parent, fg_color="transparent")
+        row.pack(fill="x", padx=10, pady=3)
+
+        lbl = ctk.CTkLabel(row, text=label_text, width=150, anchor="w", font=ctk.CTkFont(size=11))
+        lbl.pack(side="left")
+
+        color = "#ffd54f" if highlight else "#ffffff"
+        font = ctk.CTkFont(size=11, weight="bold")
+
+        val_entry = ctk.CTkEntry(row, height=26, font=font, text_color=color)
+        val_entry.insert(0, default_val)
+        val_entry.pack(side="left", fill="x", expand=True, padx=(0, 6))
+
+        if has_copy:
+            btn_copy = ctk.CTkButton(
+                row,
+                text="📋 Chép",
+                width=60,
+                height=26,
+                font=ctk.CTkFont(size=10, weight="bold"),
+                fg_color="#374151",
+                hover_color="#0284c7",
+                command=lambda e=val_entry, n=label_text: self.copy_value(e.get(), n)
+            )
+            btn_copy.pack(side="right")
+
+        return val_entry
+
+    def copy_value(self, text, field_name):
+        try:
+            self.clipboard_clear()
+            self.clipboard_append(text.strip())
+            self.update()
+            clean_name = re.sub(r'[^a-zA-Z0-9\s\u00C0-\u1EF9]', '', field_name).strip()
+            self.lbl_status.configure(text=f"✅ Đã sao chép {clean_name}: {text.strip()}", text_color="#00e676")
+        except Exception:
+            pass
+
+    def fetch_deposit_info_async(self):
+        if not self.is_alive():
+            return
+        try:
+            self.lbl_qr_img.configure(image=None, text="⏳ Đang tạo hóa đơn nạp the24h.vn & tải VietQR...", wraplength=240, justify="center")
+        except Exception:
+            pass
+
+        def _worker():
+            if not self.is_alive():
+                return
+            data = self.web_client.get_deposit_info(self.current_amount)
+            if not self.is_alive():
+                return
+            try:
+                self.after(0, lambda: self._on_deposit_info_ready(data))
+            except Exception:
+                pass
+
+        threading.Thread(target=_worker, daemon=True).start()
+
+    def _on_deposit_info_ready(self, data):
+        if not self.is_alive():
+            return
+        try:
+            self.deposit_data = data
+            bank_name = data.get("bank_name", "BIDV")
+            stk = data.get("account_no", "").strip()
+            holder = data.get("account_name", "THE24H").strip()
+            syntax = data.get("syntax", f"THE24H {self.web_client.user_name or ''}").strip()
+
+            self.row_bank.delete(0, "end")
+            self.row_bank.insert(0, bank_name)
+
+            self.row_stk.delete(0, "end")
+            if stk:
+                self.row_stk.insert(0, stk)
+            else:
+                self.row_stk.insert(0, "Chưa lấy được STK (Vui lòng điền)")
+
+            self.row_holder.delete(0, "end")
+            self.row_holder.insert(0, holder)
+
+            self.row_memo.delete(0, "end")
+            self.row_memo.insert(0, syntax)
+
+            self.update_qr_image()
+        except Exception:
+            pass
+
+    def set_amount(self, val: int):
+        if not self.is_alive():
+            return
+        try:
+            self.current_amount = max(10000, int(val))
+            self.entry_amount.delete(0, "end")
+            self.entry_amount.insert(0, str(self.current_amount))
+            self.fetch_deposit_info_async()
+        except Exception:
+            pass
+
+    def on_amount_submitted(self):
+        if not self.is_alive():
+            return
+        try:
+            val_str = re.sub(r'[^\d]', '', self.entry_amount.get().strip())
+            val = int(val_str) if val_str else 0
+            if val < 10000:
+                messagebox.showwarning("Số tiền không hợp lệ", "the24h.vn yêu cầu nạp tối thiểu từ 10,000 đ trở lên!")
+                return
+            self.current_amount = val
+            self.fetch_deposit_info_async()
+        except Exception:
+            pass
+
+    def update_qr_image(self):
+        if not self.is_alive():
+            return
+        try:
+            amt = self.current_amount
+            stk = self.row_stk.get().strip()
+            holder = self.row_holder.get().strip()
+            memo = self.row_memo.get().strip()
+            bank = self.row_bank.get().strip().lower() or "bidv"
+
+            self.row_money.delete(0, "end")
+            self.row_money.insert(0, f"{amt:,} đ")
+
+            if not stk or "đang tải" in stk.lower() or "chưa lấy" in stk.lower():
+                self.lbl_qr_img.configure(image=None, text="⚠️ Vui lòng nhập Số tài khoản nhận tiền", wraplength=240, justify="center")
+                return
+
+            direct_url = self.deposit_data.get("direct_qr_url", "")
+            if direct_url and direct_url.startswith("http") and amt == self.default_amount:
+                qr_url = direct_url
+            else:
+                qr_url = The24hWebClient.generate_vietqr_url(bank, stk, holder, amt, memo)
+
+            self.lbl_qr_img.configure(image=None, text="⏳ Đang tải mã VietQR...", wraplength=240, justify="center")
+
+            def _fetch_qr():
+                if not self.is_alive():
+                    return
+                try:
+                    r = requests.get(qr_url, timeout=12)
+                    if not self.is_alive():
+                        return
+                    if r.status_code == 200:
+                        pil_img = Image.open(io.BytesIO(r.content))
+                        if self.is_alive():
+                            self.after(0, lambda: self._display_qr(pil_img))
+                    else:
+                        if self.is_alive():
+                            self.after(0, lambda: self.lbl_qr_img.configure(text="❌ Lỗi tải QR từ ngân hàng", wraplength=240, justify="center"))
+                except Exception:
+                    if self.is_alive():
+                        try:
+                            self.after(0, lambda: self.lbl_qr_img.configure(text="❌ Không thể kết nối VietQR", wraplength=240, justify="center"))
+                        except Exception:
+                            pass
+
+            threading.Thread(target=_fetch_qr, daemon=True).start()
+        except Exception:
+            pass
+
+    def _display_qr(self, pil_img):
+        if not self.is_alive():
+            return
+        try:
+            ctk_img = ctk.CTkImage(light_image=pil_img, dark_image=pil_img, size=(250, 250))
+            self.lbl_qr_img.configure(image=ctk_img, text="")
+            self.qr_image_tk = ctk_img
+        except Exception:
+            pass
+
+    def start_balance_polling(self):
+        if not self.poll_active or not self.is_alive():
+            return
+        self._check_balance_once(silent=True)
+        try:
+            self.poll_timer = self.after(4000, self.start_balance_polling)
+        except Exception:
+            pass
+
+    def _check_balance_once(self, silent=False):
+        if not self.is_alive():
+            return
+
+        def _worker():
+            if not self.is_alive():
+                return
+            info = self.web_client.update_user_info()
+            if not self.is_alive():
+                return
+            try:
+                self.after(0, lambda: self._on_balance_polled(info, silent))
+            except Exception:
+                pass
+
+        threading.Thread(target=_worker, daemon=True).start()
+
+    def _on_balance_polled(self, info, silent=False):
+        if not self.is_alive():
+            return
+        try:
+            new_bal_str = info.get("balance", "") or self.web_client.balance or "0đ"
+            new_bal_val = self.parent._parse_money_val(new_bal_str)
+            self.lbl_wallet_now.configure(text=f"Số dư ví the24h: {new_bal_str}")
+
+            if new_bal_val > self.initial_balance_val:
+                diff_added = new_bal_val - self.initial_balance_val
+                self.lbl_status.configure(
+                    text=f"🎉 ĐÃ NHẬN TIỀN THÀNH CÔNG! (+{diff_added:,}đ) | Số dư mới: {new_bal_str}",
+                    text_color="#00e676"
+                )
+                self.btn_start_topup.configure(
+                    state="normal",
+                    fg_color="#00c853",
+                    hover_color="#00a844",
+                    text="🚀 ĐỦ TIỀN RỒI - BẮT ĐẦU NẠP NGAY"
+                )
+                self.parent.lbl_balance.configure(text=f"Số dư ví: {new_bal_str}")
+                self.parent.recalculate_and_sync_table()
+            else:
+                if not silent:
+                    self.lbl_status.configure(
+                        text=f"Số dư ví chưa thay đổi ({new_bal_str}). Đang tiếp tục theo dõi...",
+                        text_color="#ffd54f"
+                    )
+        except Exception:
+            pass
+
+    def on_start_batch_clicked(self):
+        self.on_close()
+        if self.on_topup_success:
+            self.on_topup_success()
+
+
 class The24hAutoTopupApp(ctk.CTk):
     def __init__(self):
         super().__init__()
@@ -41,7 +543,12 @@ class The24hAutoTopupApp(ctk.CTk):
         self.web_client = The24hWebClient()
         self.partner_client = The24hPartnerApiClient()
         self.catalog = self.load_catalog()
-        self.config = self.load_config()
+        # Cấu hình chỉ lưu trên RAM trong suốt phiên chạy (KHÔNG LƯU Ổ CỨNG)
+        self.config = {
+            "game_code": "nr",
+            "delay": 2.0,
+            "auto_pay": True
+        }
 
         self.is_running = False
         self.stop_requested = False
@@ -55,8 +562,6 @@ class The24hAutoTopupApp(ctk.CTk):
 
         # Tải dữ liệu live ban đầu
         self.after(500, self.fetch_live_game_data)
-        # Tự động tải lịch sử nếu đã có session
-        self.after(1200, self.auto_initial_login)
 
     def load_catalog(self):
         if os.path.exists(CATALOG_FILE):
@@ -90,38 +595,16 @@ class The24hAutoTopupApp(ctk.CTk):
         }
 
     def load_config(self):
-        default_config = {
-            "username": "xlzeruslx",
-            "password": "trong1507",
-            "mkc2": "",
-            "save_mkc2": False,
+        # Cấu hình mặc định trong RAM (Không đọc/ghi file đĩa - an toàn 100% khi public)
+        return {
             "game_code": "nr",
             "delay": 2.0,
             "auto_pay": True
         }
-        if os.path.exists(CONFIG_FILE):
-            try:
-                with open(CONFIG_FILE, "r", encoding="utf-8") as f:
-                    default_config.update(json.load(f))
-            except Exception:
-                pass
-        return default_config
 
     def save_config(self):
-        cfg = {
-            "username": self.entry_username.get().strip(),
-            "password": self.entry_password.get().strip(),
-            "mkc2": self.entry_mkc2.get().strip() if self.check_save_mkc2.get() else "",
-            "save_mkc2": self.check_save_mkc2.get(),
-            "game_code": self.get_selected_game_code(),
-            "delay": float(self.entry_delay.get() or "2.0"),
-            "auto_pay": self.check_auto_pay.get()
-        }
-        try:
-            with open(CONFIG_FILE, "w", encoding="utf-8") as f:
-                json.dump(cfg, f, ensure_ascii=False, indent=2)
-        except Exception:
-            pass
+        # Không lưu thông tin ra file ổ cứng
+        pass
 
     def setup_ui(self):
         self.grid_rowconfigure(1, weight=1)
@@ -231,8 +714,8 @@ class The24hAutoTopupApp(ctk.CTk):
         mkc2_opts.pack(fill="x", padx=10, pady=(0, 6))
         self.check_show_mkc2 = ctk.CTkCheckBox(mkc2_opts, text="Hiện MKC2", font=ctk.CTkFont(size=10), command=self.toggle_show_mkc2)
         self.check_show_mkc2.pack(side="left")
-        self.check_save_mkc2 = ctk.CTkCheckBox(mkc2_opts, text="Ghi nhớ MKC2", font=ctk.CTkFont(size=10))
-        self.check_save_mkc2.pack(side="right")
+        lbl_ram_only = ctk.CTkLabel(mkc2_opts, text="🔒 RAM Only (Tắt là xóa)", font=ctk.CTkFont(size=10, weight="bold"), text_color="#10b981")
+        lbl_ram_only.pack(side="right")
 
         self.btn_login = ctk.CTkButton(
             box_acc, 
@@ -305,7 +788,18 @@ class The24hAutoTopupApp(ctk.CTk):
             text_color="#00e676"
         )
         self.check_auto_pay.select()
-        self.check_auto_pay.pack(anchor="w", padx=10, pady=(4, 10))
+        self.check_auto_pay.pack(anchor="w", padx=10, pady=(4, 8))
+
+        btn_open_deposit = ctk.CTkButton(
+            box_opt,
+            text="⚡ Nạp Quỹ / Quét QR VietQR",
+            height=30,
+            font=ctk.CTkFont(size=11, weight="bold"),
+            fg_color="#0284c7",
+            hover_color="#0369a1",
+            command=self.open_topup_qr_dialog
+        )
+        btn_open_deposit.pack(fill="x", padx=10, pady=(0, 10))
 
         # -------------------------------------------------------------
         # 2.2 RIGHT PANEL: TABS (NẠP TIỀN & LỊCH SỬ NẠP)
@@ -503,51 +997,97 @@ class The24hAutoTopupApp(ctk.CTk):
         # TAB 2: LỊCH SỬ NẠP THE24H (MỚI)
         # =============================================================
         tab_history.grid_columnconfigure(0, weight=1)
-        tab_history.grid_rowconfigure(1, weight=1)
+        tab_history.grid_rowconfigure(2, weight=1)
 
         hist_toolbar = ctk.CTkFrame(tab_history, fg_color="#262c3b", corner_radius=8)
-        hist_toolbar.grid(row=0, column=0, sticky="ew", padx=8, pady=(6, 6))
+        hist_toolbar.grid(row=0, column=0, sticky="ew", padx=8, pady=(6, 4))
 
         lbl_hist_title = ctk.CTkLabel(
             hist_toolbar, 
-            text="📜 LỊCH SỬ NẠP TOPUP TRÊN TÀI KHOẢN THE24H.VN", 
-            font=ctk.CTkFont(size=12, weight="bold"),
+            text="📜 LỊCH SỬ NẠP TOPUP TRÊN THE24H.VN", 
+            font=ctk.CTkFont(size=13, weight="bold"), 
             text_color="#00d2ff"
         )
-        lbl_hist_title.pack(side="left", padx=10)
+        lbl_hist_title.pack(side="left", padx=10, pady=6)
 
         self.lbl_hist_count = ctk.CTkLabel(
             hist_toolbar, 
-            text="(Đang chờ nạp...)", 
+            text="(Đang chờ tải...)", 
             font=ctk.CTkFont(size=11),
             text_color="#9aa0a6"
         )
         self.lbl_hist_count.pack(side="left", padx=5)
 
+        btn_export_hist = ctk.CTkButton(
+            hist_toolbar,
+            text="📊 Xuất Lịch Sử CSV",
+            height=28,
+            width=130,
+            font=ctk.CTkFont(size=11, weight="bold"),
+            fg_color="#374151",
+            hover_color="#4b5563",
+            command=self.export_history_csv
+        )
+        btn_export_hist.pack(side="right", padx=10, pady=6)
+
         btn_fetch_history = ctk.CTkButton(
             hist_toolbar, 
-            text="🔄 TẢI LỊCH SỬ TỪ THE24H", 
+            text="🔄 TẢI TOÀN BỘ LỊCH SỬ", 
             height=28,
-            font=ctk.CTkFont(weight="bold"),
-            fg_color="#0284c7",
+            font=ctk.CTkFont(size=11, weight="bold"),
+            fg_color="#0284c7", 
             hover_color="#0369a1",
             command=self.load_recharge_history
         )
-        btn_fetch_history.pack(side="right", padx=10, pady=6)
+        btn_fetch_history.pack(side="right", padx=(0, 6), pady=6)
 
-        # Bảng Lịch Sử Treeview
+        # Khung thẻ Thống kê Tổng Nạp & Chiết khấu (Stats Bar)
+        hist_stats_frame = ctk.CTkFrame(tab_history, fg_color="#1e222d", corner_radius=8)
+        hist_stats_frame.grid(row=1, column=0, sticky="ew", padx=8, pady=(0, 6))
+        hist_stats_frame.grid_columnconfigure((0, 1, 2, 3), weight=1)
+
+        # Thẻ 1: Tổng gói nạp (Mệnh giá)
+        box_stat1 = ctk.CTkFrame(hist_stats_frame, fg_color="#262c3b", corner_radius=6)
+        box_stat1.grid(row=0, column=0, padx=5, pady=6, sticky="nsew")
+        ctk.CTkLabel(box_stat1, text="💎 TỔNG GÓI NẠP (MỆNH GIÁ)", font=ctk.CTkFont(size=10, weight="bold"), text_color="#9aa0a6").pack(anchor="w", padx=10, pady=(6, 1))
+        self.lbl_hist_total_face = ctk.CTkLabel(box_stat1, text="0 đ", font=ctk.CTkFont(size=15, weight="bold"), text_color="#00d2ff")
+        self.lbl_hist_total_face.pack(anchor="w", padx=10, pady=(0, 6))
+
+        # Thẻ 2: Tổng thực trừ ví
+        box_stat2 = ctk.CTkFrame(hist_stats_frame, fg_color="#262c3b", corner_radius=6)
+        box_stat2.grid(row=0, column=1, padx=5, pady=6, sticky="nsew")
+        ctk.CTkLabel(box_stat2, text="💰 TỔNG THỰC TRỪ VÍ", font=ctk.CTkFont(size=10, weight="bold"), text_color="#9aa0a6").pack(anchor="w", padx=10, pady=(6, 1))
+        self.lbl_hist_total_paid = ctk.CTkLabel(box_stat2, text="0 đ", font=ctk.CTkFont(size=15, weight="bold"), text_color="#00e676")
+        self.lbl_hist_total_paid.pack(anchor="w", padx=10, pady=(0, 6))
+
+        # Thẻ 3: Tiết kiệm chiết khấu
+        box_stat3 = ctk.CTkFrame(hist_stats_frame, fg_color="#262c3b", corner_radius=6)
+        box_stat3.grid(row=0, column=2, padx=5, pady=6, sticky="nsew")
+        ctk.CTkLabel(box_stat3, text="🎉 TIẾT KIỆM (CHIẾT KHẤU)", font=ctk.CTkFont(size=10, weight="bold"), text_color="#9aa0a6").pack(anchor="w", padx=10, pady=(6, 1))
+        self.lbl_hist_total_saved = ctk.CTkLabel(box_stat3, text="0 đ", font=ctk.CTkFont(size=15, weight="bold"), text_color="#ffd54f")
+        self.lbl_hist_total_saved.pack(anchor="w", padx=10, pady=(0, 6))
+
+        # Thẻ 4: Tổng số đơn
+        box_stat4 = ctk.CTkFrame(hist_stats_frame, fg_color="#262c3b", corner_radius=6)
+        box_stat4.grid(row=0, column=3, padx=5, pady=6, sticky="nsew")
+        ctk.CTkLabel(box_stat4, text="📊 TỔNG SỐ ĐƠN NẠP", font=ctk.CTkFont(size=10, weight="bold"), text_color="#9aa0a6").pack(anchor="w", padx=10, pady=(6, 1))
+        self.lbl_hist_order_counts = ctk.CTkLabel(box_stat4, text="0 đơn", font=ctk.CTkFont(size=14, weight="bold"), text_color="#f3f4f6")
+        self.lbl_hist_order_counts.pack(anchor="w", padx=10, pady=(0, 6))
+
+        # Bảng Lịch Sử Treeview (Row 2)
         hist_table_box = ctk.CTkFrame(tab_history, fg_color="#262c3b", corner_radius=8)
-        hist_table_box.grid(row=1, column=0, sticky="nsew", padx=8, pady=(0, 6))
+        hist_table_box.grid(row=2, column=0, sticky="nsew", padx=8, pady=(0, 6))
         hist_table_box.grid_columnconfigure(0, weight=1)
         hist_table_box.grid_rowconfigure(0, weight=1)
 
-        hist_cols = ("stt", "order_code", "service", "account", "amount", "pay_amount", "status", "created_at")
+        hist_cols = ("stt", "order_code", "service", "server_name", "account", "amount", "pay_amount", "status", "created_at")
         self.tree_history = ttk.Treeview(hist_table_box, columns=hist_cols, show="headings", selectmode="browse")
 
         self.tree_history.heading("stt", text="#")
         self.tree_history.heading("order_code", text="Mã đơn hàng")
         self.tree_history.heading("service", text="Dịch vụ")
-        self.tree_history.heading("account", text="Tài khoản / Server nhận")
+        self.tree_history.heading("server_name", text="Máy chủ")
+        self.tree_history.heading("account", text="Tài khoản nhận")
         self.tree_history.heading("amount", text="Gói nạp")
         self.tree_history.heading("pay_amount", text="Thực trừ ví")
         self.tree_history.heading("status", text="Trạng thái")
@@ -555,12 +1095,13 @@ class The24hAutoTopupApp(ctk.CTk):
 
         self.tree_history.column("stt", width=35, minwidth=35, stretch=False, anchor="center")
         self.tree_history.column("order_code", width=140, minwidth=120, stretch=False, anchor="center")
-        self.tree_history.column("service", width=85, minwidth=70, stretch=False, anchor="center")
-        self.tree_history.column("account", width=220, minwidth=180, stretch=True, anchor="w")
-        self.tree_history.column("amount", width=100, minwidth=85, stretch=False, anchor="center")
-        self.tree_history.column("pay_amount", width=100, minwidth=85, stretch=False, anchor="e")
-        self.tree_history.column("status", width=110, minwidth=90, stretch=False, anchor="center")
-        self.tree_history.column("created_at", width=140, minwidth=120, stretch=False, anchor="center")
+        self.tree_history.column("service", width=75, minwidth=65, stretch=False, anchor="center")
+        self.tree_history.column("server_name", width=110, minwidth=90, stretch=False, anchor="center")
+        self.tree_history.column("account", width=190, minwidth=150, stretch=True, anchor="w")
+        self.tree_history.column("amount", width=95, minwidth=85, stretch=False, anchor="center")
+        self.tree_history.column("pay_amount", width=95, minwidth=85, stretch=False, anchor="e")
+        self.tree_history.column("status", width=105, minwidth=90, stretch=False, anchor="center")
+        self.tree_history.column("created_at", width=135, minwidth=115, stretch=False, anchor="center")
 
         h_scroll_y = ttk.Scrollbar(hist_table_box, orient="vertical", command=self.tree_history.yview)
         h_scroll_x = ttk.Scrollbar(hist_table_box, orient="horizontal", command=self.tree_history.xview)
@@ -616,7 +1157,7 @@ class The24hAutoTopupApp(ctk.CTk):
             action_container, 
             text="🚀 BẮT ĐẦU NẠP TẤT CẢ", 
             height=42, 
-            width=230,
+            width=210,
             font=ctk.CTkFont(size=14, weight="bold"),
             fg_color="#00c853", 
             hover_color="#00a844",
@@ -628,7 +1169,7 @@ class The24hAutoTopupApp(ctk.CTk):
             action_container, 
             text="⏹ DỪNG LẠI", 
             height=42, 
-            width=120,
+            width=100,
             font=ctk.CTkFont(size=13, weight="bold"),
             fg_color="#d32f2f", 
             hover_color="#b71c1c",
@@ -636,6 +1177,18 @@ class The24hAutoTopupApp(ctk.CTk):
             command=self.stop_recharge_batch
         )
         self.btn_stop.pack(side="right")
+
+        self.btn_topup_qr = ctk.CTkButton(
+            action_container,
+            text="💳 NẠP TIỀN QUÉT MÃ QR",
+            height=42,
+            width=210,
+            font=ctk.CTkFont(size=12, weight="bold"),
+            fg_color="#0284c7",
+            hover_color="#0369a1",
+            command=self.open_topup_qr_dialog
+        )
+        self.btn_topup_qr.pack(side="right", padx=(0, 10))
 
     def log(self, msg: str):
         now = datetime.now().strftime("%H:%M:%S")
@@ -646,16 +1199,10 @@ class The24hAutoTopupApp(ctk.CTk):
         self.entry_mkc2.configure(show="" if self.check_show_mkc2.get() else "*")
 
     def apply_config(self):
+        # Ô đăng nhập, mật khẩu, MKC2 luôn để trống ban đầu - hoàn toàn không lưu trên máy
         self.entry_username.delete(0, "end")
-        self.entry_username.insert(0, self.config.get("username", "xlzeruslx"))
-
         self.entry_password.delete(0, "end")
-        self.entry_password.insert(0, self.config.get("password", "trong1507"))
-
-        if self.config.get("save_mkc2", False):
-            self.check_save_mkc2.select()
-            self.entry_mkc2.delete(0, "end")
-            self.entry_mkc2.insert(0, self.config.get("mkc2", ""))
+        self.entry_mkc2.delete(0, "end")
 
         self.entry_delay.delete(0, "end")
         self.entry_delay.insert(0, str(self.config.get("delay", 2.0)))
@@ -670,10 +1217,7 @@ class The24hAutoTopupApp(ctk.CTk):
                 break
 
     def auto_initial_login(self):
-        u = self.entry_username.get().strip()
-        p = self.entry_password.get().strip()
-        if u and p:
-            self.handle_login_threaded(silent=True)
+        pass
 
     def get_selected_game_code(self):
         val = self.combo_game.get()
@@ -829,11 +1373,21 @@ class The24hAutoTopupApp(ctk.CTk):
                     text=f"✅ Số dư ví {current_wallet:,.0f}đ đủ thanh toán cho {num_acc} tài khoản (Tổng: {total_pay:,.0f}đ)",
                     text_color="#00e676"
                 )
+                self.btn_topup_qr.configure(
+                    text="⚡ Nạp Thêm Quỹ / QR",
+                    fg_color="#374151",
+                    hover_color="#4b5563"
+                )
             else:
                 diff = total_pay - current_wallet
                 self.lbl_running_status.configure(
                     text=f"⚠️ Cần: {total_pay:,.0f}đ | Số dư ví: {current_wallet:,.0f}đ (Thiếu: {diff:,.0f}đ)",
                     text_color="#ffd54f"
+                )
+                self.btn_topup_qr.configure(
+                    text=f"💳 Quét QR Nạp Thiếu: {diff:,.0f}đ",
+                    fg_color="#0284c7",
+                    hover_color="#0369a1"
                 )
 
         # 2. Cập nhật Treeview bảng tiến trình
@@ -867,9 +1421,10 @@ class The24hAutoTopupApp(ctk.CTk):
             }
             self.task_list.append(task_item)
 
+            acc_disp = f"\u200b{acc}" if (acc and acc.startswith("0")) else acc
             self.tree.insert("", "end", iid=str(idx), values=(
                 idx,
-                acc,
+                acc_disp,
                 server_info["name"],
                 item_info["label"],
                 gem_display,
@@ -946,7 +1501,6 @@ class The24hAutoTopupApp(ctk.CTk):
             self.lbl_user_name.configure(text=f"Tài khoản: {user}")
             self.lbl_balance.configure(text=f"Số dư ví: {balance}")
             self.log(f"Đăng nhập thành công! Chủ tài khoản: {user} | Số dư ví: {balance}")
-            self.save_config()
             self.recalculate_and_sync_table()
             # Tự động tải lịch sử nạp
             self.load_recharge_history()
@@ -983,14 +1537,72 @@ class The24hAutoTopupApp(ctk.CTk):
             self.handle_login_threaded()
             return
 
-        self.lbl_hist_count.configure(text="(Đang tải dữ liệu từ the24h.vn...)")
-        self.log("Đang tải danh sách lịch sử nạp tiền từ the24h.vn...")
+        self.lbl_hist_count.configure(text="(Đang tải tất cả giao dịch...)")
+        self.log("Đang tải toàn bộ lịch sử giao dịch từ the24h.vn...")
+
+        def _on_progress(p, count):
+            self.after(0, lambda: self.lbl_hist_count.configure(text=f"(Đang tải trang {p}: {count} đơn...)"))
 
         def _worker():
-            history = self.web_client.get_recharge_history(page=1)
+            history = self.web_client.get_recharge_history(page=0, progress_callback=_on_progress)
             self.after(0, lambda: self._on_history_loaded(history))
 
         threading.Thread(target=_worker, daemon=True).start()
+
+    @staticmethod
+    def _parse_money_val(val) -> int:
+        if not val:
+            return 0
+        clean = re.sub(r'[^\d]', '', str(val))
+        try:
+            return int(clean) if clean else 0
+        except Exception:
+            return 0
+
+    def resolve_server_name(self, service_code: str, server_id: str) -> str:
+        """Quy đổi ID server thành tên hiển thị chuẩn (ví dụ: ID 10 -> 7 Sao, ID 22 -> 15 sao)"""
+        if not server_id:
+            return ""
+        
+        sid_str = str(server_id).strip()
+        svc = str(service_code).strip().lower()
+
+        # 1. Tra cứu trực tiếp trong catalog đã tải
+        target_game = None
+        for g_code, g_data in self.catalog.items():
+            g_name = g_data.get("name", "").lower()
+            if svc == g_code.lower() or svc in g_name or g_code.lower() in svc:
+                target_game = g_data
+                break
+            if svc in ["nr", "ngocrong"] and g_code == "nr":
+                target_game = g_data
+                break
+            if svc in ["nj", "ninja", "ninjaschool"] and g_code == "nj":
+                target_game = g_data
+                break
+            if svc in ["hs", "hso", "hiepsi"] and g_code == "hs":
+                target_game = g_data
+                break
+
+        if not target_game and "nr" in self.catalog:
+            target_game = self.catalog["nr"]
+
+        if target_game:
+            for s in target_game.get("servers", []):
+                if str(s.get("id", "")).strip() == sid_str:
+                    return s.get("name", sid_str)
+
+        # 2. Bảng mapping dự phòng chuẩn Ngọc Rồng (The24h)
+        nr_mapping = {
+            "1": "1 Sao", "2": "2 Sao", "3": "3 Sao", "6": "4 Sao", "7": "5 Sao", "9": "6 Sao",
+            "10": "7 Sao", "11": "8 Sao", "12": "9 sao", "13": "10 Sao", "14": "11 sao (vip 1)",
+            "15": "12 sao", "18": "13 sao", "20": "14 sao", "22": "15 sao", "19": "VIP 2",
+            "16": "super 1", "17": "super 2", "21": "super 3"
+        }
+        if sid_str in nr_mapping:
+            return nr_mapping[sid_str]
+
+        return f"Sv {sid_str}"
 
     def _on_history_loaded(self, history):
         self.history_list = history
@@ -999,26 +1611,135 @@ class The24hAutoTopupApp(ctk.CTk):
 
         if not history:
             self.lbl_hist_count.configure(text="(Chưa có lịch sử hoặc không lấy được)")
+            self.lbl_hist_total_face.configure(text="0 đ")
+            self.lbl_hist_total_paid.configure(text="0 đ")
+            self.lbl_hist_total_saved.configure(text="0 đ")
+            self.lbl_hist_order_counts.configure(text="0 đơn")
             self.log("Không tìm thấy đơn nạp nào trong lịch sử.")
             return
 
-        self.lbl_hist_count.configure(text=f"(Tìm thấy {len(history)} đơn gần nhất)")
-        self.log(f"Đã tải thành công {len(history)} đơn nạp gần nhất từ the24h.vn!")
+        self.lbl_hist_count.configure(text=f"(Tất cả {len(history)} giao dịch)")
+        self.log(f"Đã tải thành công toàn bộ {len(history)} giao dịch từ the24h.vn!")
+
+        total_face = 0
+        total_paid = 0
+        success_count = 0
+        pending_count = 0
+        failed_count = 0
 
         for idx, h in enumerate(history, 1):
             st = h.get("status", "")
-            tag = "completed" if "hoàn thành" in st.lower() else ("failed" if "hủy" in st.lower() or "thất bại" in st.lower() else "pending")
+            st_lower = st.lower()
+            if "hoàn thành" in st_lower:
+                tag = "completed"
+                success_count += 1
+            elif "chờ" in st_lower:
+                tag = "pending"
+                pending_count += 1
+            else:
+                tag = "failed"
+                failed_count += 1
+
+            face_val = self._parse_money_val(h.get("amount", ""))
+            paid_val = self._parse_money_val(h.get("pay_amount", ""))
+            total_face += face_val
+            total_paid += paid_val
+
+            amount_disp = f"{face_val:,} đ" if face_val > 0 else (h.get("amount", "") or "0 đ")
+            paid_disp = f"{paid_val:,} đ" if paid_val > 0 else (h.get("pay_amount", "") or "0 đ")
+
+            server_name = self.resolve_server_name(h.get("service", ""), h.get("server_id", ""))
+            game_acc = h.get("game_username", "") or h.get("account_info", "")
+            game_acc_disp = f"\u200b{game_acc}" if (game_acc and game_acc.startswith("0")) else game_acc
 
             self.tree_history.insert("", "end", iid=str(idx), values=(
                 idx,
                 h.get("order_code", ""),
                 h.get("service", "").upper(),
-                h.get("account_info", ""),
-                h.get("amount", ""),
-                f"{h.get('pay_amount', '')} đ",
+                server_name,
+                game_acc_disp,
+                amount_disp,
+                paid_disp,
                 st,
                 h.get("created_at", "")
             ), tags=(tag,))
+
+        saved_val = max(0, total_face - total_paid)
+        self.lbl_hist_total_face.configure(text=f"{total_face:,} đ")
+        self.lbl_hist_total_paid.configure(text=f"{total_paid:,} đ")
+        self.lbl_hist_total_saved.configure(text=f"{saved_val:,} đ")
+        self.lbl_hist_order_counts.configure(text=f"{len(history)} đơn ({success_count} xong • {pending_count} chờ)")
+
+    def export_history_csv(self):
+        if not self.history_list:
+            messagebox.showwarning("Chưa có dữ liệu", "Không có dữ liệu lịch sử để xuất!")
+            return
+        
+        file_path = filedialog.asksaveasfilename(
+            defaultextension=".csv",
+            filetypes=[("CSV Files", "*.csv"), ("All Files", "*.*")],
+            initialfile=f"lich_su_nap_the24h_{datetime.now().strftime('%Y%m%d_%H%M%S')}.csv"
+        )
+        if not file_path:
+            return
+
+        try:
+            import csv
+            with open(file_path, "w", newline="", encoding="utf-8-sig") as f:
+                writer = csv.writer(f)
+                writer.writerow(["STT", "Mã đơn hàng", "Dịch vụ", "Máy chủ", "Tài khoản nhận", "Gói nạp", "Thực trừ ví", "Trạng thái", "Thời gian tạo"])
+                for idx, h in enumerate(self.history_list, 1):
+                    s_name = self.resolve_server_name(h.get("service", ""), h.get("server_id", ""))
+                    g_acc = h.get("game_username", "") or h.get("account_info", "")
+                    writer.writerow([
+                        idx,
+                        h.get("order_code", ""),
+                        h.get("service", "").upper(),
+                        s_name,
+                        g_acc,
+                        h.get("amount", ""),
+                        h.get("pay_amount", ""),
+                        h.get("status", ""),
+                        h.get("created_at", "")
+                    ])
+            messagebox.showinfo("Thành công", f"Đã xuất lịch sử ra file:\n{file_path}")
+        except Exception as e:
+            messagebox.showerror("Lỗi xuất file", str(e))
+
+    # =========================================================================
+    # NẠP TIỀN QUỸ THE24H.VN / MÃ QR VIETQR
+    # =========================================================================
+    def open_topup_qr_dialog(self, default_amount=None):
+        """Mở hộp thoại tạo mã QR VietQR nạp tiền vào quỹ the24h.vn"""
+        if not self.web_client.logged_in:
+            ans = messagebox.askyesno(
+                "Chưa đăng nhập the24h.vn",
+                "Bạn cần đăng nhập tài khoản the24h.vn để hệ thống lấy đúng Ngân hàng, STK và Cú pháp nạp tiền cá nhân của bạn.\n\n"
+                "Bạn có muốn đăng nhập ngay bây giờ không?"
+            )
+            if ans:
+                self.handle_login_threaded()
+            return
+
+        if default_amount is None:
+            # Tự động tính số tiền còn thiếu từ danh sách nick đang chờ nạp
+            total_needed = sum(t.get("price", 0) for t in self.task_list if t.get("status") != "Thành công")
+            current_wallet = self._parse_money_val(self.web_client.balance)
+            diff = total_needed - current_wallet
+            default_amount = diff if diff > 0 else (total_needed if total_needed > 0 else 50000)
+
+        TopupQRDialog(
+            parent=self,
+            web_client=self.web_client,
+            default_amount=int(default_amount),
+            on_topup_success=self._on_qr_topup_success
+        )
+
+    def _on_qr_topup_success(self):
+        """Callback khi chuyển khoản thành công và số dư đã được cộng vào ví"""
+        self.recalculate_and_sync_table()
+        self.log("✅ Tiền nạp đã vào ví the24h.vn thành công! Bắt đầu tiến trình nạp...")
+        self.start_recharge_batch()
 
     # =========================================================================
     # BẮT ĐẦU TIẾN TRÌNH NẠP BATCH
@@ -1036,6 +1757,36 @@ class The24hAutoTopupApp(ctk.CTk):
 
         mkc2 = self.entry_mkc2.get().strip()
         auto_pay = self.check_auto_pay.get()
+
+        # KIỂM TRA SỐ DƯ VÍ SO VỚI TỔNG TIỀN CẦN NẠP
+        total_needed = sum(t.get("price", 0) for t in self.task_list if t.get("status") != "Thành công")
+        current_wallet = self._parse_money_val(self.web_client.balance)
+        diff = total_needed - current_wallet
+
+        if auto_pay and diff > 0:
+            pending_count = sum(1 for t in self.task_list if t.get("status") != "Thành công")
+            msg = (
+                f"⚠️ SỐ DƯ VÍ KHÔNG ĐỦ ĐỂ NẠP TOÀN BỘ DANH SÁCH!\n\n"
+                f"• Số tài khoản chờ nạp: {pending_count} nick\n"
+                f"• Tổng tiền cần nạp: {total_needed:,.0f} đ\n"
+                f"• Số dư ví the24h hiện tại: {current_wallet:,.0f} đ\n"
+                f"• Số tiền còn thiếu: {diff:,.0f} đ\n\n"
+                f"👉 Bạn có muốn mở MÃ QR VIETQR để chuyển khoản đúng {diff:,.0f} đ ngay không?\n"
+                f"(Sau khi chuyển khoản xong, hệ thống sẽ tự động phát hiện số dư mới và tiếp tục nạp)"
+            )
+            ans = messagebox.askyesno("Số dư ví không đủ", msg)
+            if ans:
+                self.open_topup_qr_dialog(default_amount=diff)
+                return
+            else:
+                ans_cont = messagebox.askyesno(
+                    "Xác nhận nạp thiếu",
+                    f"Bạn chọn không nạp thêm tiền. Hệ thống sẽ nạp các tài khoản lần lượt cho đến khi hết số dư ví ({current_wallet:,.0f} đ).\n\n"
+                    f"Bạn có chắc chắn muốn chạy không?"
+                )
+                if not ans_cont:
+                    return
+
         if auto_pay and not mkc2:
             ans = messagebox.askyesno(
                 "Chưa nhập MKC2",
@@ -1053,7 +1804,6 @@ class The24hAutoTopupApp(ctk.CTk):
         self.btn_stop.configure(state="normal")
         self.lbl_running_status.configure(text="Đang thực hiện nạp lần lượt...", text_color="#00d2ff")
 
-        self.save_config()
         self.log("=== BẮT ĐẦU NẠP DANH SÁCH TÀI KHOẢN ===")
 
         self.current_worker = threading.Thread(target=self._batch_worker, daemon=True)
@@ -1120,6 +1870,12 @@ class The24hAutoTopupApp(ctk.CTk):
 
                 self.after(0, lambda i=item_id, m=err_msg: self._update_row_status(i, "Thất bại", "", m, "failed"))
                 self.log(f"-> [THẤT BẠI] Tài khoản {acc}: {err_msg}")
+
+                if "số dư" in err_msg.lower() or "không đủ" in err_msg.lower():
+                    self.after(0, lambda: self.lbl_running_status.configure(
+                        text="⚠️ Hết số dư ví! Bấm 'Quét QR' để nạp thêm và tiếp tục.",
+                        text_color="#ff5252"
+                    ))
 
             progress = (idx + 1) / total
             self.after(0, lambda p=progress: self.progress_bar.set(p))
